@@ -31,6 +31,36 @@ EXCERPT:
 SUMMARY (bullets):"""
 
 
+FAST_SUMMARY_SYSTEM = (
+    "You are a research assistant producing a structured summary of an academic white paper. "
+    "Be clear, concise, and faithful to the source text. Do not invent information."
+)
+
+FAST_SUMMARY_PROMPT = """Summarize the following white paper excerpt into a structured report.
+
+Format your output exactly as:
+
+## Overview
+2-3 sentence description of what this paper is about and why it matters.
+
+## Key Contributions
+- 3-5 bullets on the main contributions or claims.
+
+## Approach / Method
+- 2-4 bullets on how the authors did it (architecture, algorithm, dataset, etc.).
+
+## Results / Findings
+- 2-4 bullets on key results or findings.
+
+## Limitations or Open Questions
+- 1-3 bullets (only if mentioned in the text).
+
+PAPER EXCERPT:
+{excerpt}
+
+STRUCTURED SUMMARY:"""
+
+
 REDUCE_SUMMARY_SYSTEM = (
     "You are a research assistant producing the final summary of an academic white paper "
     "from partial summaries of its sections. Be clear, structured, and faithful."
@@ -91,39 +121,19 @@ PLAIN-LANGUAGE EXPLANATION:"""
 def summarize_paper(
     paper: ParsedPaper,
     ollama: OllamaClient,
-    map_chunk_size: int = 1500,
-    map_overlap: int = 150,
     model: str | None = None,
+    **_kwargs,
 ) -> str:
-    """Map-reduce summary of the entire paper."""
-    # Step 1 (MAP): break the full text into largish chunks and summarize each
-    chunks = chunk_text(paper.full_text, chunk_size=map_chunk_size, overlap=map_overlap)
-    if not chunks:
-        return "(Empty paper — nothing to summarize.)"
-
-    partial_summaries: list[str] = []
-    for i, chunk in enumerate(chunks):
-        prompt = CHUNK_SUMMARY_PROMPT.format(chunk=chunk)
-        summary = ollama.chat(
-            prompt=prompt,
-            system=CHUNK_SUMMARY_SYSTEM,
-            model=model,
-            temperature=0.2,
-        )
-        partial_summaries.append(f"[Part {i+1}]\n{summary.strip()}")
-
-    # Step 2 (REDUCE): combine partials into a structured final summary
-    combined = "\n\n".join(partial_summaries)
-    final_prompt = REDUCE_SUMMARY_PROMPT.format(partial_summaries=combined)
-    final = ollama.chat(
-        prompt=final_prompt,
-        system=REDUCE_SUMMARY_SYSTEM,
+    """Single-call summary using a smart excerpt of the paper."""
+    excerpt = _build_excerpt(paper)
+    prompt = FAST_SUMMARY_PROMPT.format(excerpt=excerpt)
+    return ollama.chat(
+        prompt=prompt,
+        system=FAST_SUMMARY_SYSTEM,
         model=model,
         temperature=0.3,
-        # Reduce step may need bigger context window
-        num_ctx=16384,
-    )
-    return final.strip()
+        num_ctx=8192,
+    ).strip()
 
 
 def explain_section(
@@ -159,6 +169,53 @@ def explain_section(
     ).strip()
 
 
+# ---------- Helpers ----------
+
+_SUMMARY_SECTION_LIMIT = 2200   # per-section word cap (~3000 tokens)
+_SUMMARY_TOTAL_BUDGET = 3500    # total words for the summary prompt
+
+
+def _trim_at_sentence(text: str, max_words: int) -> str:
+    """Trim to max_words at the nearest sentence boundary (. ? !)."""
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    candidate = " ".join(words[:max_words])
+    for marker in (". ", "? ", "! ", ".\n", "?\n", "!\n"):
+        pos = candidate.rfind(marker)
+        if pos > len(candidate) * 0.6:
+            return candidate[: pos + 1].strip()
+    return candidate.strip()
+
+
+def _build_excerpt(paper: ParsedPaper) -> str:
+    """Build a representative excerpt using the headings-first architecture.
+
+    1. Sections are already split at logical boundaries — use that structure.
+    2. Walk in document order, trim each section at the nearest sentence end
+       if it exceeds the per-section limit.
+    3. Stop when the total budget is consumed.
+    4. Falls back to full_text truncation for papers with no detected sections.
+    """
+    if not paper.sections or len(paper.sections) <= 1:
+        return _trim_at_sentence(paper.full_text, _SUMMARY_TOTAL_BUDGET)
+
+    parts: list[str] = []
+    budget = _SUMMARY_TOTAL_BUDGET
+
+    for section in paper.sections:
+        if budget <= 0:
+            break
+        text = section.text.strip()
+        if not text:
+            continue
+        trimmed = _trim_at_sentence(text, min(_SUMMARY_SECTION_LIMIT, budget))
+        parts.append(f"[{section.title}]\n{trimmed}")
+        budget -= len(trimmed.split())
+
+    return "\n\n".join(parts)
+
+
 # ---------- Streaming versions (SSE) ----------
 
 
@@ -169,51 +226,35 @@ def _sse(data: dict) -> str:
 def summarize_paper_stream(
     paper: ParsedPaper,
     ollama: OllamaClient,
-    map_chunk_size: int = 1500,
-    map_overlap: int = 150,
     model: str | None = None,
+    **_kwargs,
 ) -> Generator[str, None, None]:
-    """Yields SSE-formatted strings for the map-reduce summary pipeline.
+    """Single-call streaming summary — fast (~30-60s vs 3-5min map-reduce).
 
-    Phase 1 (MAP): each chunk streams its bullet summary live so the user
-    sees text immediately. Accumulated text is cleared when the reduce starts.
-    Phase 2 (REDUCE): final structured summary streams token-by-token.
+    Builds a smart excerpt (abstract + intro + key sections + conclusion),
+    feeds it to the LLM in one shot, streams tokens back.
     """
-    chunks = chunk_text(paper.full_text, chunk_size=map_chunk_size, overlap=map_overlap)
-    if not chunks:
-        yield _sse({"type": "token", "text": "(Empty paper — nothing to summarize.)"})
-        yield _sse({"type": "done"})
-        return
+    excerpt = _build_excerpt(paper)
+    total_sections = len([s for s in paper.sections if s.text.strip()])
 
-    total = len(chunks)
-    partial_summaries: list[str] = []
+    yield _sse({"type": "map_start", "total": 1})
+    yield _sse({
+        "type": "map_chunk_start",
+        "chunk": 1,
+        "total": 1,
+        "label": f"Building excerpt from {total_sections} section(s)…",
+    })
 
-    yield _sse({"type": "map_start", "total": total})
+    prompt = FAST_SUMMARY_PROMPT.format(excerpt=excerpt)
 
-    # MAP: stream each chunk summary so text appears immediately
-    for i, chunk in enumerate(chunks):
-        yield _sse({"type": "map_chunk_start", "chunk": i + 1, "total": total})
-        chunk_tokens: list[str] = []
-        for token in ollama.chat_stream(
-            prompt=CHUNK_SUMMARY_PROMPT.format(chunk=chunk),
-            system=CHUNK_SUMMARY_SYSTEM,
-            model=model,
-            temperature=0.2,
-        ):
-            yield _sse({"type": "token", "text": token})
-            chunk_tokens.append(token)
-        partial_summaries.append(f"[Part {i + 1}]\n{''.join(chunk_tokens).strip()}")
-
-    # REDUCE: clear the map output and stream the final structured summary
     yield _sse({"type": "reduce_start"})
-    combined = "\n\n".join(partial_summaries)
-    final_prompt = REDUCE_SUMMARY_PROMPT.format(partial_summaries=combined)
+
     for token in ollama.chat_stream(
-        prompt=final_prompt,
-        system=REDUCE_SUMMARY_SYSTEM,
+        prompt=prompt,
+        system=FAST_SUMMARY_SYSTEM,
         model=model,
         temperature=0.3,
-        num_ctx=16384,
+        num_ctx=8192,
     ):
         yield _sse({"type": "token", "text": token})
 

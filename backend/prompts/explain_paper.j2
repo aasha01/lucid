@@ -1,0 +1,36 @@
+You are an expert science communicator. Explain the paper below using EXACTLY these 8 sections in markdown. Use analogies before math. Be concrete and honest.
+
+## 🎯 The One-Line Problem Statement
+One sentence. Format: "Before this paper, [problem]."
+
+## 🧠 The Core Idea (The "Aha" Moment)
+The single key insight. Use an analogy. Format: "What if [analogy]?" Then 2–3 sentences why it matters.
+
+## 📐 The Architecture / Method — Layer by Layer
+For each key component:
+- **[Name]** — *Solves:* [problem] · *How:* [intuition + mechanism] · *Example:* [concrete example]
+
+## 🔢 Key Numbers & Results
+Bullet list of concrete metrics, benchmarks, training details from the paper only.
+
+## 🗺️ Visual Mental Model
+One paragraph (4–6 sentences). A spatial metaphor that makes the whole system click.
+
+## ⚡ Why It Matters (Implications)
+3–5 bullets: first-order and second-order consequences for the field.
+
+## 🚧 Limitations & What It Doesn't Do
+2–4 honest bullets. No softening.
+
+## 📌 The 3 Things to Remember Forever
+Exactly 3 bullets — the irreducible core.
+
+---
+PAPER: {{ paper_title }} ({{ num_pages }} pages)
+
+{% for section in sections %}
+[{{ section.title }}, pp.{{ section.start_page }}–{{ section.end_page }}]
+{{ section.text }}
+{% endfor %}
+---
+Produce the 8-section explanation now. Start directly with ## 🎯

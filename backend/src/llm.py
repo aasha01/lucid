@@ -126,7 +126,7 @@ class OllamaClient:
         r = requests.post(
             f"{self.base_url}/api/embeddings",
             json=payload,
-            timeout=60,
+            timeout=self.timeout,
         )
         r.raise_for_status()
         return r.json()["embedding"]

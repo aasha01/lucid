@@ -2,11 +2,16 @@
 // Works with POST requests (unlike EventSource which only supports GET).
 
 export interface SSEEvent {
-  type: "progress" | "token" | "done" | "error" | "map_start" | "map_chunk_start" | "reduce_start";
-  message?: string; // progress
-  text?: string;    // token
-  total?: number;   // map_start, map_chunk_start
-  chunk?: number;   // map_chunk_start
+  type: "progress" | "token" | "done" | "error" | "map_start" | "map_chunk_start" | "reduce_start" | "milestone";
+  message?: string;   // progress / milestone
+  text?: string;      // token
+  total?: number;     // map_start, map_chunk_start
+  chunk?: number;     // map_chunk_start
+  label?: string;     // map_chunk_start — section title or "Part N"
+  // milestone fields
+  step?: string;
+  status?: "start" | "done";
+  detail?: string[];
 }
 
 export async function* streamSSE(

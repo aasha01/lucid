@@ -1,6 +1,7 @@
 import type { IngestResponse } from "../api";
-import { SummaryTab } from "./SummaryTab";
+import { ExplainTab } from "./ExplainTab";
 import { SectionsTab } from "./SectionsTab";
+import { SummaryTab } from "./SummaryTab";
 import { ChatTab } from "./ChatTab";
 
 interface Props {
@@ -12,7 +13,6 @@ interface Props {
 export function PaperPanel({ paper, model, onUploadAnother }: Props) {
   return (
     <div className="workspace">
-      {/* Left: scrollable summary + sections */}
       <div className="workspace-left">
         <section className="paper-card">
           <div>
@@ -28,17 +28,22 @@ export function PaperPanel({ paper, model, onUploadAnother }: Props) {
         </section>
 
         <div className="left-section">
-          <div className="section-heading">Summary</div>
-          <SummaryTab paperId={paper.paper_id} model={model} />
+          <div className="section-heading">
+            <span>Section Derivation</span>
+            <span className="section-heading-sub">detected structure · click to explain</span>
+          </div>
+          <SectionsTab paperId={paper.paper_id} model={model} />
         </div>
 
         <div className="left-section">
-          <div className="section-heading">Sections</div>
-          <SectionsTab paperId={paper.paper_id} model={model} />
+          <div className="section-heading">
+            <span>Explanation</span>
+            <span className="section-heading-sub">8-section deep breakdown</span>
+          </div>
+          <ExplainTab paperId={paper.paper_id} model={model} />
         </div>
       </div>
 
-      {/* Right: sticky chat panel */}
       <div className="workspace-right">
         <div className="chat-panel-heading">Chat with the paper</div>
         <ChatTab paperId={paper.paper_id} model={model} />

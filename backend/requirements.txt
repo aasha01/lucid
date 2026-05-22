@@ -5,3 +5,4 @@ pymupdf==1.24.10
 lancedb>=0.10.0,<1.0
 requests==2.32.3
 pydantic==2.9.2
+jinja2>=3.1.0

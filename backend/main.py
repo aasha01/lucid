@@ -18,6 +18,12 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from datetime import datetime
+
+
+def log(msg: str) -> None:
+    """Print a timestamped log line that always appears in the uvicorn terminal."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] LUCID  {msg}", flush=True)
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +35,7 @@ from pydantic import BaseModel
 from backend.src.llm import OllamaClient
 from backend.src.pdf_loader import ParsedPaper, extract_text_from_pdf
 from backend.src.qa import answer_question
+from backend.src.explainer import explain_paper_stream
 from backend.src.summarizer import (
     explain_section,
     explain_section_stream,
@@ -146,6 +153,7 @@ def health():
     ollama = OllamaClient()
     reachable = ollama.ping()
     models = ollama.list_models() if reachable else []
+    log(f"GET /health — ollama={reachable}, models={models}, papers_loaded={len(PAPERS)}")
     return HealthResponse(
         ollama_reachable=reachable,
         available_models=models,
@@ -159,34 +167,40 @@ async def ingest(file: UploadFile = File(...)):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
-    # Save upload
     paper_id = uuid.uuid4().hex[:12]
     safe_name = Path(file.filename).name
     saved_path = UPLOAD_DIR / f"{paper_id}__{safe_name}"
+    log(f"POST /ingest — file={safe_name}, paper_id={paper_id}")
+
     with saved_path.open("wb") as f:
         shutil.copyfileobj(file.file, f)
+    log(f"[{paper_id}] Saved to {saved_path}")
 
-    # Parse
     try:
         paper = extract_text_from_pdf(saved_path)
+        log(f"[{paper_id}] Parsed: {paper.num_pages} pages, {len(paper.sections)} sections detected")
+        for s in paper.sections:
+            log(f"[{paper_id}]   § {s.order+1:02d}  {s.title!r:40s}  p.{s.start_page}–{s.end_page}")
     except Exception as e:
+        log(f"[{paper_id}] PDF parsing failed: {e}")
         raise HTTPException(status_code=500, detail=f"PDF parsing failed: {e}")
 
-    # Embed + store
     ollama = OllamaClient()
     if not ollama.ping():
-        raise HTTPException(
-            status_code=503,
-            detail="Ollama is not reachable on localhost:11434. Start Ollama and try again.",
-        )
+        raise HTTPException(status_code=503, detail="Ollama not reachable on localhost:11434.")
+
     store = _make_vector_store(paper_id, ollama)
-    store.reset()  # fresh collection for a fresh paper
+    store.reset()
     try:
+        log(f"[{paper_id}] Embedding chunks…")
         n_chunks = store.ingest_paper(paper)
+        log(f"[{paper_id}] Indexed {n_chunks} chunks → LanceDB")
     except Exception as e:
+        log(f"[{paper_id}] Embedding/storage failed: {e}")
         raise HTTPException(status_code=500, detail=f"Embedding/storage failed: {e}")
 
     PAPERS[paper_id] = paper
+    log(f"[{paper_id}] Ingest complete ✓")
 
     return IngestResponse(
         paper_id=paper_id,
@@ -226,20 +240,48 @@ def post_summarize(paper_id: str, model: Optional[str] = None):
     return SummaryResponse(paper_id=paper_id, summary=summary)
 
 
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "X-Accel-Buffering": "no",   # disables nginx / proxy buffering
+    "Connection": "keep-alive",
+}
+
+
+@app.post("/explain-paper/{paper_id}/stream")
+def post_explain_paper_stream(paper_id: str, model: Optional[str] = None):
+    """Streaming 8-section deep explanation using the Jinja2 template."""
+    paper = _get_paper(paper_id)
+    ollama = OllamaClient()
+
+    log(f"[{paper_id}] POST /explain-paper/stream — model={model or 'default'}")
+
+    def _generate():
+        try:
+            yield from explain_paper_stream(paper, ollama, model=model)
+        except Exception as e:
+            import json as _json
+            log(f"[{paper_id}] explain_paper_stream error: {e}")
+            yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(_generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
 @app.post("/summarize/{paper_id}/stream")
 def post_summarize_stream(paper_id: str, model: Optional[str] = None):
     """Streaming SSE version of summarize. Yields progress + tokens."""
     paper = _get_paper(paper_id)
     ollama = OllamaClient()
+    log(f"[{paper_id}] POST /summarize/stream — model={model or 'default'}")
 
     def _generate():
         try:
             yield from summarize_paper_stream(paper, ollama, model=model)
         except Exception as e:
             import json
+            log(f"[{paper_id}] summarize_paper_stream error: {e}")
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
-    return StreamingResponse(_generate(), media_type="text/event-stream")
+    return StreamingResponse(_generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 @app.post("/explain/stream")
@@ -258,7 +300,7 @@ def post_explain_stream(req: ExplainRequest):
             import json
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
-    return StreamingResponse(_generate(), media_type="text/event-stream")
+    return StreamingResponse(_generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 @app.post("/explain", response_model=ExplainResponse)

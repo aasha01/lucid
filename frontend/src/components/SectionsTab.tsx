@@ -107,7 +107,27 @@ export function SectionsTab({ paperId, model }: Props) {
 
   return (
     <div className="sections-tab-layout">
-      {/* Sticky pills — always visible */}
+      {/* High-level heading list — always visible immediately after upload */}
+      <div className="headings-list">
+        <div className="headings-meta">{sections.length} sections detected</div>
+        {sections.map((s) => (
+          <button
+            key={s.order}
+            className={`heading-row ${active === s.order ? "heading-row-active" : ""}`}
+            onClick={() => explainSection(s)}
+          >
+            <span className="heading-num">{s.order + 1}</span>
+            <span className="heading-title">{s.title}</span>
+            <span className="heading-pages">p.{s.start_page}–{s.end_page}</span>
+            {explains[s.order]?.text
+              ? <span className="heading-done">✓</span>
+              : <span className="heading-explain">Explain →</span>
+            }
+          </button>
+        ))}
+      </div>
+
+      {/* Sticky pills for quick jump — visible once you scroll down */}
       <div className="section-pills-sticky">
         {sections.map((s) => (
           <button
@@ -121,7 +141,7 @@ export function SectionsTab({ paperId, model }: Props) {
         ))}
       </div>
 
-      {/* Section blocks */}
+      {/* Section blocks — explanations appear here when clicked */}
       <div className="sections-body">
         {sections.map((s) => {
           const state = explains[s.order];

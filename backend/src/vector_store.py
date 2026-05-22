@@ -12,9 +12,14 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import datetime
 from pathlib import Path
 
 import lancedb
+
+
+def _log(msg: str) -> None:
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] STORE  {msg}", flush=True)
 
 from .llm import OllamaClient
 from .pdf_loader import ParsedPaper, chunk_text
@@ -76,15 +81,22 @@ class VectorStore:
         if not texts:
             return 0
 
-        embeddings = self.ollama.embed_batch(texts)
+        total = len(texts)
+        _log(f"Embedding {total} chunks via Ollama…")
+        embeddings: list[list[float]] = []
+        for i, text in enumerate(texts, start=1):
+            if i == 1 or i % 10 == 0 or i == total:
+                _log(f"  chunk {i}/{total}")
+            embeddings.append(self.ollama.embed(text))
 
+        _log(f"All {total} chunks embedded — writing to LanceDB…")
         records = [
             {**meta, "text": text, "vector": emb}
             for meta, text, emb in zip(metas, texts, embeddings)
         ]
 
-        # mode="overwrite" replaces any existing table for this paper
         self.db.create_table(self.collection_name, data=records, mode="overwrite")
+        _log(f"Stored {len(records)} chunks → '{self.collection_name}'")
         return len(records)
 
     # ---------- Retrieval ----------

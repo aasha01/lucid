@@ -61,9 +61,11 @@ export function Uploader({ onUploaded }: Props) {
         }}
       />
       <div className="uploader-inner">
-        <div className="upload-icon" aria-hidden>
-          ↑
-        </div>
+        {uploading ? (
+          <div className="upload-spinner" aria-hidden />
+        ) : (
+          <div className="upload-icon" aria-hidden>↑</div>
+        )}
         <h2>{uploading ? progressText : "Drop a PDF here"}</h2>
         <p>
           {uploading
