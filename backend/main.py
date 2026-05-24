@@ -34,7 +34,7 @@ from pydantic import BaseModel
 
 from backend.src.llm import OllamaClient
 from backend.src.pdf_loader import ParsedPaper, extract_text_from_pdf
-from backend.src.qa import answer_question
+from backend.src.qa import answer_question, answer_question_stream
 from backend.src.explainer import explain_paper_stream
 from backend.src.summarizer import (
     explain_section,
@@ -536,6 +536,31 @@ def post_ask(req: AskRequest):
         answer=result["answer"],
         sources=[SourceInfo(**s) for s in result["sources"]],
     )
+
+
+@app.post("/ask/stream")
+def post_ask_stream(req: AskRequest):
+    """Streaming version of /ask. Yields tokens via SSE, then a done event with sources."""
+    import json as _json
+    _get_paper(req.paper_id)  # validate paper_id
+    ollama = OllamaClient()
+    store = _make_vector_store(req.paper_id, ollama)
+    log(f"[{req.paper_id}] POST /ask/stream — q={req.question[:60]!r}")
+
+    def _generate():
+        try:
+            yield from answer_question_stream(
+                question=req.question,
+                store=store,
+                ollama=ollama,
+                top_k=req.top_k,
+                model=req.model,
+            )
+        except Exception as e:
+            log(f"[{req.paper_id}] ask_stream error: {e}")
+            yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(_generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 @app.get("/")

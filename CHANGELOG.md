@@ -4,13 +4,38 @@ All notable changes to Lucid are documented here, in reverse chronological order
 
 | Version | Date | Summary |
 |---|---|---|
-| Unreleased | 2026-05-24 | GROBID PDF parsing, disk cache, sections accordion UI, paper registry |
+| 0.4.0 | 2026-05-24 | Streaming chat Q&A — tokens appear as generated instead of waiting for full response |
+| 0.3.0 | 2026-05-24 | GROBID PDF parsing, disk cache, sections accordion UI, paper registry |
 | 0.2.0 | 2026-05-23 | Section-aware chunking, ExplainTab, streaming SSE, dark UI overhaul |
 | 0.1.0 | 2026-05-17 | Initial release — FastAPI + React, LanceDB RAG, Ollama integration |
 
 ---
 
-## [Unreleased] — 2026-05-24
+## [0.4.0] — 2026-05-24
+
+### feat: Streaming chat Q&A
+
+#### Backend — new SSE endpoint (`backend/src/qa.py`, `backend/main.py`)
+- Added `answer_question_stream()` to `qa.py` — same RAG pipeline as `answer_question()` but uses `ollama.chat_stream()` to yield tokens as they arrive from the LLM
+- Tokens are emitted as `{"type": "token", "text": "..."}` SSE events
+- Final `{"type": "done", "sources": [...]}` event carries the retrieved source chunks so the frontend can render citations after generation completes
+- Added `POST /ask/stream` endpoint in `main.py` that wraps `answer_question_stream()` in a `StreamingResponse`; errors are caught and emitted as `{"type": "error", "message": "..."}` events
+- Old `POST /ask` (non-streaming) endpoint retained for compatibility
+
+#### Frontend — streaming chat UI (`frontend/src/components/ChatTab.tsx`, `frontend/src/streamSSE.ts`)
+- `ChatTab` rewritten to use `streamSSE("/api/ask/stream", ...)` instead of `api.ask()`
+- An empty assistant message placeholder is added immediately when Send is clicked; the typing-dots animation shows while waiting for the first token
+- Tokens accumulate into the message bubble in real time; a blinking cursor is shown while generation is in progress
+- `sources` arrive in the `done` event and are attached to the message for the collapsible citations panel
+- `SSEEvent` interface in `streamSSE.ts` gains a `sources` field to type the done-event payload
+
+#### Why this matters
+- Previously the chat was a blocking HTTP request: the UI froze for 30–90 seconds waiting for `qwen2.5:14b` to finish generating the full answer before anything was returned
+- Now the first token appears within ~1 second and the answer streams in word by word, matching the feel of the section explanation and summary features
+
+---
+
+## [0.3.0] — 2026-05-24
 
 ### feat: GROBID parsing, disk cache, sections accordion UI
 

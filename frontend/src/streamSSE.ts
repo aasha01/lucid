@@ -9,6 +9,7 @@ export interface SSEEvent {
   chunk?: number;     // map_chunk_start
   label?: string;     // map_chunk_start — section title or "Part N"
   cached?: boolean;   // done — true when served from disk cache
+  sources?: Array<{ page: number | null; section: string | null; text: string; distance: number | null }>;
   // milestone fields
   step?: string;
   status?: "start" | "done";

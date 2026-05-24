@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { api, type SourceInfo } from "../api";
+import { type SourceInfo } from "../api";
+import { streamSSE } from "../streamSSE";
 
 interface Props {
   paperId: string;
@@ -12,6 +13,7 @@ interface ChatMessage {
   text: string;
   sources?: SourceInfo[];
   error?: boolean;
+  streaming?: boolean;
 }
 
 export function ChatTab({ paperId, model }: Props) {
@@ -25,29 +27,69 @@ export function ChatTab({ paperId, model }: Props) {
       top: scrollRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [messages, sending]);
+  }, [messages]);
 
   async function send() {
     const q = input.trim();
     if (!q || sending) return;
     setInput("");
-    setMessages((m) => [...m, { role: "user", text: q }]);
     setSending(true);
+
+    setMessages((m) => [
+      ...m,
+      { role: "user", text: q },
+      { role: "assistant", text: "", streaming: true },
+    ]);
+
     try {
-      const res = await api.ask(paperId, q, 6, model);
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", text: res.answer, sources: res.sources },
-      ]);
+      const stream = streamSSE("/api/ask/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paper_id: paperId, question: q, top_k: 6, model }),
+      });
+
+      let accumulated = "";
+
+      for await (const event of stream) {
+        if (event.type === "token" && event.text) {
+          accumulated += event.text;
+          setMessages((m) => {
+            const copy = [...m];
+            copy[copy.length - 1] = { ...copy[copy.length - 1], text: accumulated };
+            return copy;
+          });
+        } else if (event.type === "done") {
+          setMessages((m) => {
+            const copy = [...m];
+            copy[copy.length - 1] = {
+              role: "assistant",
+              text: accumulated,
+              sources: event.sources as SourceInfo[] | undefined,
+            };
+            return copy;
+          });
+        } else if (event.type === "error") {
+          setMessages((m) => {
+            const copy = [...m];
+            copy[copy.length - 1] = {
+              role: "assistant",
+              text: event.message ?? "An error occurred",
+              error: true,
+            };
+            return copy;
+          });
+        }
+      }
     } catch (e) {
-      setMessages((m) => [
-        ...m,
-        {
+      setMessages((m) => {
+        const copy = [...m];
+        copy[copy.length - 1] = {
           role: "assistant",
           text: e instanceof Error ? e.message : String(e),
           error: true,
-        },
-      ]);
+        };
+        return copy;
+      });
     } finally {
       setSending(false);
     }
@@ -65,7 +107,18 @@ export function ChatTab({ paperId, model }: Props) {
         {messages.map((m, i) => (
           <div key={i} className={`message message-${m.role}`}>
             <div className={`message-bubble ${m.error ? "error" : ""}`}>
-              <ReactMarkdown>{m.text}</ReactMarkdown>
+              {m.streaming && m.text === "" ? (
+                <div className="typing">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </div>
+              ) : (
+                <>
+                  <ReactMarkdown>{m.text}</ReactMarkdown>
+                  {m.streaming && <span className="cursor-blink" />}
+                </>
+              )}
             </div>
             {m.sources && m.sources.length > 0 && (
               <details className="sources">
@@ -90,15 +143,6 @@ export function ChatTab({ paperId, model }: Props) {
             )}
           </div>
         ))}
-        {sending && (
-          <div className="message message-assistant">
-            <div className="message-bubble typing">
-              <span></span>
-              <span></span>
-              <span></span>
-            </div>
-          </div>
-        )}
       </div>
 
       <form
