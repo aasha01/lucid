@@ -43,6 +43,7 @@ from backend.src.summarizer import (
     summarize_paper_stream,
 )
 from backend.src.vector_store import VectorStore
+from backend.src.cache import PaperCache, load_all_papers, load_registry, update_registry
 
 
 # ---------- Config ----------
@@ -64,8 +65,73 @@ app.add_middleware(
 
 
 # ---------- In-memory paper registry ----------
-# paper_id -> ParsedPaper (cached so we don't reparse on every request)
+# paper_id -> ParsedPaper (populated at startup from disk cache, then kept live)
 PAPERS: dict[str, ParsedPaper] = {}
+
+
+@app.on_event("startup")
+def _restore_papers() -> None:
+    # Load full ParsedPaper objects from cache files that have the "paper" key
+    restored = load_all_papers()
+    PAPERS.update(restored)
+    log(f"Restored {len(restored)} paper(s) from cache")
+
+    # Backfill registry for any paper not yet registered
+    _backfill_registry(restored)
+
+
+def _backfill_registry(loaded: dict) -> None:
+    """Populate registry.json from existing cache files and upload folder."""
+    import lancedb as _lancedb
+
+    registry = load_registry()
+    added = 0
+
+    # Papers with full cache — register with complete metadata
+    for paper_id, paper in loaded.items():
+        if paper_id not in registry:
+            chunks = 0
+            try:
+                db = _lancedb.connect(str(PROJECT_ROOT / "data" / "lancedb"))
+                chunks = db.open_table(paper_id).count_rows()
+            except Exception:
+                chunks = PaperCache(paper_id).get_chunks_count()
+            update_registry(
+                paper_id=paper_id,
+                filename=paper.filename,
+                title=paper.title or paper.filename,
+                num_pages=paper.num_pages,
+                num_sections=len(paper.sections),
+                num_chunks_indexed=chunks,
+            )
+            added += 1
+
+    # Uploads without any cache — register with filename only (parsed on Open)
+    for pdf_path in UPLOAD_DIR.glob("*__*.pdf"):
+        parts = pdf_path.stem.split("__", 1)
+        if len(parts) != 2:
+            continue
+        paper_id, name_stem = parts
+        if paper_id in registry or paper_id in loaded:
+            continue
+        chunks = 0
+        try:
+            db = _lancedb.connect(str(PROJECT_ROOT / "data" / "lancedb"))
+            chunks = db.open_table(paper_id).count_rows()
+        except Exception:
+            pass
+        update_registry(
+            paper_id=paper_id,
+            filename=name_stem + ".pdf",
+            title=name_stem.replace("-", " ").replace("_", " "),
+            num_pages=0,
+            num_sections=0,
+            num_chunks_indexed=chunks,
+        )
+        added += 1
+
+    if added:
+        log(f"Registry backfilled: {added} new entries added")
 
 
 # ---------- Pydantic models ----------
@@ -83,6 +149,8 @@ class SectionInfo(BaseModel):
     start_page: int
     end_page: int
     text: str
+    level: int = 1
+    section_number: str = ""
 
 
 class SectionsResponse(BaseModel):
@@ -128,6 +196,15 @@ class AskResponse(BaseModel):
     sources: list[SourceInfo]
 
 
+class PaperListItem(BaseModel):
+    paper_id: str
+    filename: str
+    num_pages: int
+    num_sections: int
+    num_chunks_indexed: int
+    title: str
+
+
 class HealthResponse(BaseModel):
     ollama_reachable: bool
     available_models: list[str]
@@ -158,6 +235,49 @@ def health():
         ollama_reachable=reachable,
         available_models=models,
         papers_loaded=len(PAPERS),
+    )
+
+
+@app.get("/papers", response_model=list[PaperListItem])
+def list_papers():
+    """Return metadata for all ever-ingested papers from the registry."""
+    registry = load_registry()
+    items = [
+        PaperListItem(paper_id=pid, **meta)
+        for pid, meta in registry.items()
+    ]
+    return sorted(items, key=lambda x: x.filename)
+
+
+@app.post("/papers/{paper_id}/load", response_model=IngestResponse)
+def load_paper(paper_id: str):
+    """Load a previously ingested paper into memory (re-parses from upload if needed)."""
+    if paper_id in PAPERS:
+        paper = PAPERS[paper_id]
+        return IngestResponse(
+            paper_id=paper_id,
+            filename=paper.filename,
+            num_pages=paper.num_pages,
+            num_sections=len(paper.sections),
+            num_chunks_indexed=PaperCache(paper_id).get_chunks_count(),
+        )
+    matches = list(UPLOAD_DIR.glob(f"{paper_id}__*.pdf"))
+    if not matches:
+        raise HTTPException(status_code=404, detail="Upload file not found. Please re-upload the PDF.")
+    try:
+        log(f"[{paper_id}] Re-parsing from upload…")
+        paper = extract_text_from_pdf(matches[0])
+        PAPERS[paper_id] = paper
+        PaperCache(paper_id).set_paper(paper)
+        log(f"[{paper_id}] Re-parsed: {len(paper.sections)} sections")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Re-parse failed: {e}")
+    return IngestResponse(
+        paper_id=paper_id,
+        filename=paper.filename,
+        num_pages=paper.num_pages,
+        num_sections=len(paper.sections),
+        num_chunks_indexed=PaperCache(paper_id).get_chunks_count(),
     )
 
 
@@ -200,6 +320,17 @@ async def ingest(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Embedding/storage failed: {e}")
 
     PAPERS[paper_id] = paper
+    pc = PaperCache(paper_id)
+    pc.set_paper(paper)
+    pc.set_chunks_count(n_chunks)
+    update_registry(
+        paper_id=paper_id,
+        filename=paper.filename,
+        title=paper.title or paper.filename,
+        num_pages=paper.num_pages,
+        num_sections=len(paper.sections),
+        num_chunks_indexed=n_chunks,
+    )
     log(f"[{paper_id}] Ingest complete ✓")
 
     return IngestResponse(
@@ -223,6 +354,8 @@ def get_sections(paper_id: str):
                 start_page=s.start_page,
                 end_page=s.end_page,
                 text=s.text,
+                level=s.level,
+                section_number=s.section_number,
             )
             for s in paper.sections
         ],
@@ -232,11 +365,17 @@ def get_sections(paper_id: str):
 @app.post("/summarize/{paper_id}", response_model=SummaryResponse)
 def post_summarize(paper_id: str, model: Optional[str] = None):
     paper = _get_paper(paper_id)
+    cache = PaperCache(paper_id)
+    cached = cache.get_summary()
+    if cached:
+        log(f"[{paper_id}] summary cache hit")
+        return SummaryResponse(paper_id=paper_id, summary=cached)
     ollama = OllamaClient()
     try:
         summary = summarize_paper(paper, ollama, model=model)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Summarization failed: {e}")
+    cache.set_summary(summary)
     return SummaryResponse(paper_id=paper_id, summary=summary)
 
 
@@ -269,17 +408,39 @@ def post_explain_paper_stream(paper_id: str, model: Optional[str] = None):
 @app.post("/summarize/{paper_id}/stream")
 def post_summarize_stream(paper_id: str, model: Optional[str] = None):
     """Streaming SSE version of summarize. Yields progress + tokens."""
+    import json as _json
     paper = _get_paper(paper_id)
-    ollama = OllamaClient()
+    cache = PaperCache(paper_id)
     log(f"[{paper_id}] POST /summarize/stream — model={model or 'default'}")
 
+    cached = cache.get_summary()
+    if cached:
+        log(f"[{paper_id}] summary cache hit")
+        def _from_cache():
+            yield f"data: {_json.dumps({'type': 'map_start', 'total': 1})}\n\n"
+            yield f"data: {_json.dumps({'type': 'reduce_start'})}\n\n"
+            yield f"data: {_json.dumps({'type': 'token', 'text': cached})}\n\n"
+            yield f"data: {_json.dumps({'type': 'done', 'cached': True})}\n\n"
+        return StreamingResponse(_from_cache(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+    ollama = OllamaClient()
     def _generate():
+        tokens: list[str] = []
         try:
-            yield from summarize_paper_stream(paper, ollama, model=model)
+            for event in summarize_paper_stream(paper, ollama, model=model):
+                yield event
+                try:
+                    data = _json.loads(event.removeprefix("data: ").strip())
+                    if data.get("type") == "token":
+                        tokens.append(data["text"])
+                except Exception:
+                    pass
         except Exception as e:
-            import json
             log(f"[{paper_id}] summarize_paper_stream error: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        finally:
+            if tokens:
+                cache.set_summary("".join(tokens))
 
     return StreamingResponse(_generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
@@ -287,18 +448,39 @@ def post_summarize_stream(paper_id: str, model: Optional[str] = None):
 @app.post("/explain/stream")
 def post_explain_stream(req: ExplainRequest):
     """Streaming SSE version of explain. Yields progress + tokens."""
+    import json as _json
     paper = _get_paper(req.paper_id)
     if req.section_order < 0 or req.section_order >= len(paper.sections):
         raise HTTPException(status_code=400, detail="section_order out of range")
     section = paper.sections[req.section_order]
-    ollama = OllamaClient()
+    cache = PaperCache(req.paper_id)
 
+    cached = cache.get_explanation(req.section_order)
+    if cached:
+        log(f"[{req.paper_id}] explain cache hit — section {req.section_order} '{section.title}'")
+        def _from_cache():
+            yield f"data: {_json.dumps({'type': 'progress', 'message': 'Loading cached explanation…'})}\n\n"
+            yield f"data: {_json.dumps({'type': 'token', 'text': cached})}\n\n"
+            yield f"data: {_json.dumps({'type': 'done', 'cached': True})}\n\n"
+        return StreamingResponse(_from_cache(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+    ollama = OllamaClient()
     def _generate():
+        tokens: list[str] = []
         try:
-            yield from explain_section_stream(section, ollama, model=req.model)
+            for event in explain_section_stream(section, ollama, model=req.model):
+                yield event
+                try:
+                    data = _json.loads(event.removeprefix("data: ").strip())
+                    if data.get("type") == "token":
+                        tokens.append(data["text"])
+                except Exception:
+                    pass
         except Exception as e:
-            import json
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        finally:
+            if tokens:
+                cache.set_explanation(req.section_order, section.title, "".join(tokens))
 
     return StreamingResponse(_generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
@@ -309,11 +491,23 @@ def post_explain(req: ExplainRequest):
     if req.section_order < 0 or req.section_order >= len(paper.sections):
         raise HTTPException(status_code=400, detail="section_order out of range")
     section = paper.sections[req.section_order]
+    cache = PaperCache(req.paper_id)
+
+    cached = cache.get_explanation(req.section_order)
+    if cached:
+        log(f"[{req.paper_id}] explain cache hit — section {req.section_order} '{section.title}'")
+        return ExplainResponse(
+            paper_id=req.paper_id,
+            section_title=section.title,
+            explanation=cached,
+        )
+
     ollama = OllamaClient()
     try:
         explanation = explain_section(section, ollama, model=req.model)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Explanation failed: {e}")
+    cache.set_explanation(req.section_order, section.title, explanation)
     return ExplainResponse(
         paper_id=req.paper_id,
         section_title=section.title,

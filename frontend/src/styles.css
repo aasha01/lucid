@@ -366,202 +366,113 @@ body {
   flex-shrink: 0;
 }
 
-/* ---------- Headings list (always shown after upload) ---------- */
-.headings-list {
+/* ---------- Sections accordion ---------- */
+.sections-accordion {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-.headings-meta {
+.sections-meta {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-mute);
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
-.heading-row {
+.accordion-item {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  transition: border-color 0.15s;
+}
+
+.accordion-item.accordion-open {
+  border-color: var(--border);
+  background: var(--bg-elev-2);
+}
+
+.accordion-header {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
   text-align: left;
   background: none;
-  border: 1px solid transparent;
+  border: none;
   color: var(--text);
-  padding: 8px 10px;
+  padding: 9px 12px 9px 16px;
   border-radius: 8px;
   font-family: inherit;
   font-size: 13px;
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s;
+  transition: background 0.12s;
 }
 
-.heading-row:hover {
+.accordion-header:hover {
   background: var(--bg-elev-2);
-  border-color: var(--border);
 }
 
-.heading-row-active {
-  background: var(--bg-elev-2);
-  border-color: var(--accent);
+.accordion-open .accordion-header {
+  background: transparent;
 }
 
-.heading-num {
+.accordion-num {
   font-size: 11px;
   color: var(--text-mute);
   font-family: var(--mono);
-  min-width: 18px;
+  min-width: 32px;
+  flex-shrink: 0;
 }
 
-.heading-title {
+.accordion-title {
   flex: 1;
   font-weight: 500;
 }
 
-.heading-pages {
-  font-size: 11px;
-  color: var(--text-mute);
-  font-family: var(--mono);
+.accordion-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
-.heading-done {
-  font-size: 11px;
-  color: var(--ok);
-  min-width: 20px;
-  text-align: right;
-}
-
-.heading-explain {
+.accordion-action {
   font-size: 11px;
   color: var(--text-mute);
-  min-width: 56px;
-  text-align: right;
   opacity: 0;
   transition: opacity 0.15s;
+  white-space: nowrap;
 }
 
-.heading-row:hover .heading-explain {
+.accordion-header:hover .accordion-action {
   opacity: 1;
   color: var(--accent-2);
 }
 
-/* ---------- Sections tab layout ---------- */
-.sections-tab-layout {
+.accordion-progress {
   display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.section-pills-sticky {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  background: var(--bg-elev);
-  padding: 8px 0 10px;
-  display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
-  border-bottom: 1px solid var(--border);
-  margin: 0 -20px;
-  padding-left: 20px;
-  padding-right: 20px;
-}
-
-.explain-btn {
-  margin-left: auto;
-  background: none;
-  border: 1px solid var(--border-strong);
-  color: var(--text-dim);
-  padding: 3px 10px;
-  border-radius: 999px;
   font-size: 11px;
-  font-family: inherit;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
+  color: var(--text-mute);
 }
 
-.explain-btn:hover {
-  border-color: var(--accent);
-  color: var(--text);
-}
-
-.section-prompt {
+.status-done {
   font-size: 12px;
-  color: var(--text-mute);
-  cursor: pointer;
-  padding: 4px 0;
+  color: var(--ok);
 }
 
-.section-prompt:hover {
-  color: var(--text-dim);
-}
-
-.section-explanation {
-  margin-top: 8px;
-  padding-top: 8px;
+.accordion-body {
+  padding: 4px 16px 16px 16px;
   border-top: 1px solid var(--border);
 }
 
-/* ---------- Section full-text body ---------- */
-.sections-body {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  margin-top: 8px;
-}
-
-.section-block {
-  border-left: 3px solid var(--border-strong);
-  padding-left: 14px;
-  scroll-margin-top: 16px;
-  transition: border-color 0.2s;
-}
-
-.section-block-active {
-  border-left-color: var(--accent);
-}
-
-.section-block-header {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-
-.section-block-title {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.section-block-pages {
-  font-size: 11px;
+.accordion-empty {
+  font-size: 13px;
   color: var(--text-mute);
-  font-family: var(--mono);
-}
-
-.section-text {
-  font-size: 13.5px;
-  line-height: 1.7;
-  color: var(--text-dim);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.explanation-area {
-  border-top: 1px solid var(--border);
-  padding-top: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.explanation-area h4 {
-  margin: 0;
-  font-size: 14px;
+  padding: 8px 0;
 }
 
 /* ---------- Header ---------- */
@@ -1307,6 +1218,80 @@ body {
 
 .section-detail-header h3 {
   margin: 0;
+}
+
+/* ---------- Cache badge ---------- */
+.cache-badge {
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--ok);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 20px;
+  padding: 2px 9px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ---------- Recent papers list ---------- */
+.recent-papers {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recent-papers-heading {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-mute);
+  margin-bottom: 10px;
+}
+
+.recent-paper-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+
+.recent-paper-row:hover {
+  background: var(--bg-elev-2);
+}
+
+.recent-paper-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.recent-paper-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent-paper-meta {
+  font-size: 12px;
+  color: var(--text-mute);
+}
+
+.recent-paper-open {
+  flex-shrink: 0;
+  font-size: 12px;
+  padding: 5px 14px;
 }
 
 /* ---------- Footer ---------- */

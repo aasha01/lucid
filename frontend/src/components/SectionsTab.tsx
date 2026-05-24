@@ -13,6 +13,7 @@ interface ExplainState {
   loading: boolean;
   progress: string;
   error: string | null;
+  fromCache: boolean;
 }
 
 export function SectionsTab({ paperId, model }: Props) {
@@ -27,38 +28,33 @@ export function SectionsTab({ paperId, model }: Props) {
     let cancelled = false;
     setLoadingList(true);
     api.sections(paperId)
-      .then((res) => { if (!cancelled) { setSections(res.sections); } })
+      .then((res) => { if (!cancelled) setSections(res.sections); })
       .catch((e) => { if (!cancelled) setListError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (!cancelled) setLoadingList(false); });
     return () => { cancelled = true; };
   }, [paperId]);
 
-  function scrollTo(order: number) {
-    const el = document.getElementById(`section-${order}`);
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
   async function explainSection(section: SectionInfo) {
     const order = section.order;
 
-    // If already explained, just scroll
-    if (explains[order]?.text && !explains[order]?.loading) {
-      setActive(order);
-      scrollTo(order);
+    // Toggle off if already explained and not loading
+    if (active === order && explains[order]?.text && !explains[order]?.loading) {
+      setActive(null);
       return;
     }
 
-    // Abort any in-progress for this section
+    setActive(order);
+
+    // Already explained — just expand
+    if (explains[order]?.text && !explains[order]?.loading) return;
+
     abortsRef.current[order]?.abort();
     const ctrl = new AbortController();
     abortsRef.current[order] = ctrl;
 
-    setActive(order);
-    scrollTo(order);
-
     setExplains((prev) => ({
       ...prev,
-      [order]: { text: "", loading: true, progress: "Starting…", error: null },
+      [order]: { text: "", loading: true, progress: "Starting…", error: null, fromCache: false },
     }));
 
     try {
@@ -81,6 +77,10 @@ export function SectionsTab({ paperId, model }: Props) {
             [order]: { ...prev[order], text: prev[order].text + (event.text ?? "") },
           }));
         } else if (event.type === "done") {
+          setExplains((prev) => ({
+            ...prev,
+            [order]: { ...prev[order], fromCache: event.cached === true },
+          }));
           break;
         } else if (event.type === "error") {
           throw new Error(event.message ?? "Stream error");
@@ -105,94 +105,72 @@ export function SectionsTab({ paperId, model }: Props) {
   if (listError) return <div className="error-banner">⚠ {listError}</div>;
   if (!sections.length) return <div className="muted">No sections detected.</div>;
 
+  const explained = Object.values(explains).filter((e) => e.text).length;
+
   return (
-    <div className="sections-tab-layout">
-      {/* High-level heading list — always visible immediately after upload */}
-      <div className="headings-list">
-        <div className="headings-meta">{sections.length} sections detected</div>
-        {sections.map((s) => (
-          <button
-            key={s.order}
-            className={`heading-row ${active === s.order ? "heading-row-active" : ""}`}
-            onClick={() => explainSection(s)}
-          >
-            <span className="heading-num">{s.order + 1}</span>
-            <span className="heading-title">{s.title}</span>
-            <span className="heading-pages">p.{s.start_page}–{s.end_page}</span>
-            {explains[s.order]?.text
-              ? <span className="heading-done">✓</span>
-              : <span className="heading-explain">Explain →</span>
-            }
-          </button>
-        ))}
+    <div className="sections-accordion">
+      <div className="sections-meta">
+        {sections.length} sections · {explained > 0 && `${explained} explained`}
       </div>
 
-      {/* Sticky pills for quick jump — visible once you scroll down */}
-      <div className="section-pills-sticky">
-        {sections.map((s) => (
-          <button
-            key={s.order}
-            className={`section-pill ${active === s.order ? "active" : ""}`}
-            onClick={() => explainSection(s)}
-          >
-            {s.title}
-            <span className="pill-pages">p.{s.start_page}</span>
-          </button>
-        ))}
-      </div>
+      {sections.map((s) => {
+        const state = explains[s.order];
+        const isOpen = active === s.order;
+        const indent = (s.level ?? 1) - 1;
 
-      {/* Section blocks — explanations appear here when clicked */}
-      <div className="sections-body">
-        {sections.map((s) => {
-          const state = explains[s.order];
-          return (
-            <div
-              key={s.order}
-              id={`section-${s.order}`}
-              className={`section-block ${active === s.order ? "section-block-active" : ""}`}
+        return (
+          <div key={s.order} className={`accordion-item ${isOpen ? "accordion-open" : ""}`}>
+            <button
+              className="accordion-header"
+              style={{ paddingLeft: `${16 + indent * 20}px` }}
+              onClick={() => explainSection(s)}
             >
-              <div className="section-block-header">
-                <h4 className="section-block-title"
-                  onClick={() => explainSection(s)}
-                  style={{ cursor: "pointer" }}
-                >
-                  {s.title}
-                </h4>
-                <span className="section-block-pages">pp. {s.start_page}–{s.end_page}</span>
-                {!state && (
-                  <button
-                    className="explain-btn"
-                    onClick={() => explainSection(s)}
-                  >
-                    Explain
-                  </button>
-                )}
-                {state?.loading && state.progress && (
-                  <span className="progress-badge">
+              <span className="accordion-num">
+                {s.section_number || String(s.order + 1)}
+              </span>
+              <span className="accordion-title">{s.title}</span>
+              <span className="accordion-status">
+                {state?.loading && (
+                  <span className="accordion-progress">
                     <span className="spinner" />
                     {state.progress}
                   </span>
                 )}
+                {state?.text && !state.loading && state.fromCache && (
+                  <span className="cache-badge">⚡ cached</span>
+                )}
+                {state?.text && !state.loading && (
+                  <span className="status-done">✓</span>
+                )}
+                {!state && <span className="accordion-action">Explain</span>}
+              </span>
+            </button>
+
+            {isOpen && (
+              <div className="accordion-body">
+                {state?.error && <div className="error-banner">⚠ {state.error}</div>}
+
+                {!state && (
+                  <div className="accordion-empty">
+                    Click <strong>Explain</strong> above to generate a plain-language explanation.
+                  </div>
+                )}
+
+                {state?.text && (
+                  <article className="markdown">
+                    <ReactMarkdown>{state.text}</ReactMarkdown>
+                    {state.loading && <span className="cursor-blink" />}
+                  </article>
+                )}
+
+                {state?.loading && !state.text && (
+                  <div className="accordion-empty muted">{state.progress}</div>
+                )}
               </div>
-
-              {state?.error && <div className="error-banner">⚠ {state.error}</div>}
-
-              {state?.text && (
-                <article className="markdown section-explanation">
-                  <ReactMarkdown>{state.text}</ReactMarkdown>
-                  {state.loading && <span className="cursor-blink" />}
-                </article>
-              )}
-
-              {!state && (
-                <div className="section-prompt" onClick={() => explainSection(s)}>
-                  Click to get a plain-language explanation of this section.
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

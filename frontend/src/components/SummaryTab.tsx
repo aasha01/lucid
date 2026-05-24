@@ -21,6 +21,7 @@ export function SummaryTab({ paperId, model, autoLoad = true }: Props) {
   const [pct, setPct] = useState<number>(0);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [fromCache, setFromCache] = useState<boolean>(false);
   const abortRef = useRef<AbortController | null>(null);
   const totalRef = useRef<number>(1);
 
@@ -31,6 +32,7 @@ export function SummaryTab({ paperId, model, autoLoad = true }: Props) {
     setPct(0);
     setLog([{ msg: "Starting…", done: false }]);
     setError(null);
+    setFromCache(false);
     console.log("[Lucid] Summary stream started for paper:", paperId);
 
     try {
@@ -77,6 +79,7 @@ export function SummaryTab({ paperId, model, autoLoad = true }: Props) {
         } else if (event.type === "done") {
           console.log("[Lucid] Summary complete.");
           setPct(100);
+          setFromCache(event.cached === true);
           setLog((prev) => prev.map((e) => ({ ...e, done: true })));
           break;
 
@@ -140,11 +143,12 @@ export function SummaryTab({ paperId, model, autoLoad = true }: Props) {
       )}
 
       {summary && !loading && (
-        <div style={{ marginBottom: 8 }}>
+        <div style={{ marginBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
           <button className="btn btn-secondary" style={{ fontSize: 12, padding: "6px 12px" }}
             onClick={startGeneration}>
             Regenerate
           </button>
+          {fromCache && <span className="cache-badge">⚡ cached</span>}
         </div>
       )}
 

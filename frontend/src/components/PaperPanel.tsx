@@ -1,7 +1,6 @@
 import type { IngestResponse } from "../api";
 import { ExplainTab } from "./ExplainTab";
 import { SectionsTab } from "./SectionsTab";
-import { SummaryTab } from "./SummaryTab";
 import { ChatTab } from "./ChatTab";
 
 interface Props {

@@ -55,26 +55,28 @@ class VectorStore:
     def ingest_paper(
         self, paper: ParsedPaper, chunk_size: int = 800, overlap: int = 100
     ) -> int:
-        """Chunk every page, embed, and store in a LanceDB table.
+        """Chunk every section, embed, and store in a LanceDB table.
         Returns the number of chunks stored."""
         texts: list[str] = []
         metas: list[dict] = []
-        page_to_section = _build_page_section_map(paper)
 
-        for page in paper.pages:
+        for section in paper.sections:
             for chunk_idx, chunk in enumerate(
-                chunk_text(page.text, chunk_size=chunk_size, overlap=overlap)
+                chunk_text(section.text, chunk_size=chunk_size, overlap=overlap)
             ):
                 if not chunk.strip():
                     continue
                 texts.append(chunk)
                 metas.append(
                     {
-                        "id": _stable_id(paper.filename, page.page_num, chunk_idx, chunk),
+                        "id": _stable_id(paper.filename, section.order, chunk_idx, chunk),
                         "source": paper.filename,
-                        "page": page.page_num,
+                        "page": section.start_page,
                         "chunk_index": chunk_idx,
-                        "section": page_to_section.get(page.page_num, "Unknown"),
+                        "section": section.title,
+                        "section_level": section.level,
+                        "section_number": section.section_number,
+                        "parent_section": section.parent_title,
                     }
                 )
 
@@ -120,6 +122,9 @@ class VectorStore:
                 "text": r["text"],
                 "page": r["page"],
                 "section": r["section"],
+                "section_level": r.get("section_level", 1),
+                "section_number": r.get("section_number", ""),
+                "parent_section": r.get("parent_section", ""),
                 "source": r.get("source"),
                 "distance": r.get("_distance"),
             }
@@ -148,14 +153,6 @@ def _sanitize_name(name: str) -> str:
     return name
 
 
-def _stable_id(filename: str, page: int, chunk_idx: int, text: str) -> str:
+def _stable_id(filename: str, section_order: int, chunk_idx: int, text: str) -> str:
     h = hashlib.md5(text.encode()).hexdigest()[:8]
-    return f"{Path(filename).stem}_p{page}_c{chunk_idx}_{h}"
-
-
-def _build_page_section_map(paper: ParsedPaper) -> dict[int, str]:
-    m: dict[int, str] = {}
-    for s in paper.sections:
-        for p in range(s.start_page, s.end_page + 1):
-            m.setdefault(p, s.title)
-    return m
+    return f"{Path(filename).stem}_s{section_order}_c{chunk_idx}_{h}"

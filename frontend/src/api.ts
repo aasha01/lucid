@@ -17,12 +17,23 @@ export interface IngestResponse {
   num_chunks_indexed: number;
 }
 
+export interface PaperListItem {
+  paper_id: string;
+  filename: string;
+  num_pages: number;
+  num_sections: number;
+  num_chunks_indexed: number;
+  title: string;
+}
+
 export interface SectionInfo {
   order: number;
   title: string;
   start_page: number;
   end_page: number;
   text: string;
+  level: number;
+  section_number: string;
 }
 
 export interface SectionsResponse {
@@ -72,6 +83,14 @@ async function handle<T>(res: Response): Promise<T> {
 export const api = {
   async health(): Promise<HealthResponse> {
     return handle(await fetch(`${BASE}/health`));
+  },
+
+  async listPapers(): Promise<PaperListItem[]> {
+    return handle(await fetch(`${BASE}/papers`));
+  },
+
+  async loadPaper(paperId: string): Promise<IngestResponse> {
+    return handle(await fetch(`${BASE}/papers/${paperId}/load`, { method: "POST" }));
   },
 
   async ingest(file: File): Promise<IngestResponse> {

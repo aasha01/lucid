@@ -8,6 +8,7 @@ export interface SSEEvent {
   total?: number;     // map_start, map_chunk_start
   chunk?: number;     // map_chunk_start
   label?: string;     // map_chunk_start — section title or "Part N"
+  cached?: boolean;   // done — true when served from disk cache
   // milestone fields
   step?: string;
   status?: "start" | "done";

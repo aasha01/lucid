@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type HealthResponse, type IngestResponse } from "./api";
+import { api, type HealthResponse, type IngestResponse, type PaperListItem } from "./api";
 import { Uploader } from "./components/Uploader";
 import { HealthBadge } from "./components/HealthBadge";
 import { PaperPanel } from "./components/PaperPanel";
@@ -9,6 +9,8 @@ export default function App() {
   const [healthError, setHealthError] = useState<string | null>(null);
   const [paper, setPaper] = useState<IngestResponse | null>(null);
   const [model, setModel] = useState<string>("");
+  const [recentPapers, setRecentPapers] = useState<PaperListItem[]>([]);
+  const [openingId, setOpeningId] = useState<string | null>(null);
 
   async function refreshHealth() {
     try {
@@ -27,8 +29,35 @@ export default function App() {
     }
   }
 
+  async function refreshRecentPapers() {
+    try {
+      const list = await api.listPapers();
+      setRecentPapers(list);
+    } catch {
+      // silently ignore — backend may not be up yet
+    }
+  }
+
+  async function openRecentPaper(item: PaperListItem) {
+    setOpeningId(item.paper_id);
+    try {
+      const loaded = await api.loadPaper(item.paper_id);
+      setPaper(loaded);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOpeningId(null);
+    }
+  }
+
+  function handleUploaded(p: IngestResponse) {
+    setPaper(p);
+    refreshRecentPapers();
+  }
+
   useEffect(() => {
     refreshHealth();
+    refreshRecentPapers();
     const id = window.setInterval(refreshHealth, 15000);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -65,7 +94,31 @@ export default function App() {
 
       {!paper && (
         <>
-          <Uploader onUploaded={setPaper} />
+          <Uploader onUploaded={handleUploaded} />
+
+          {recentPapers.length > 0 && (
+            <div className="recent-papers">
+              <div className="recent-papers-heading">Previously ingested papers</div>
+              {recentPapers.map((item) => (
+                <div key={item.paper_id} className="recent-paper-row">
+                  <div className="recent-paper-info">
+                    <div className="recent-paper-title">{item.title}</div>
+                    <div className="recent-paper-meta">
+                      {item.num_sections} sections · {item.num_pages} pages · {item.num_chunks_indexed} chunks
+                    </div>
+                  </div>
+                  <button
+                    className="btn btn-secondary recent-paper-open"
+                    onClick={() => openRecentPaper(item)}
+                    disabled={openingId === item.paper_id}
+                  >
+                    {openingId === item.paper_id ? "Loading…" : "Open"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <footer className="app-footer">
             Local-first · Ollama + LanceDB · no data leaves your machine
           </footer>
