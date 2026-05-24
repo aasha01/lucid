@@ -15,6 +15,8 @@ data/uploads/*
 data/chroma_db/*
 !data/chroma_db/.gitkeep
 data/lancedb/
+data/cache/
+data/registry.json
 
 # Frontend
 frontend/node_modules/
